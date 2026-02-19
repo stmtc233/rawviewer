@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -333,6 +334,7 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
   late PageController _pageController;
   late int _currentIndex;
   late int _targetPage;
+  bool _isLocked = false;
 
   @override
   void initState() {
@@ -368,15 +370,15 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
       _targetPage = newTarget;
       _pageController.animateToPage(
         _targetPage,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOutCubic,
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
       );
     } else if (newTarget != _currentIndex) {
       // If we are stuck (target == current limit) but current is not there yet, animate
       _pageController.animateToPage(
         newTarget,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOutCubic,
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
       );
     }
   }
@@ -390,6 +392,9 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
         children: [
           PageView.builder(
             controller: _pageController,
+            physics: _isLocked
+                ? const NeverScrollableScrollPhysics()
+                : const FastPageScrollPhysics(),
             allowImplicitScrolling: true,
             itemCount: widget.files.length,
             onPageChanged: _onPageChanged,
@@ -403,6 +408,13 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
                 settings: widget.settings,
                 onSwitchRequest: _switchPage,
                 isActive: index == _currentIndex,
+                onScaleStateChanged: (isScaling) {
+                  if (_isLocked != isScaling) {
+                    setState(() {
+                      _isLocked = isScaling;
+                    });
+                  }
+                },
               );
             },
           ),
@@ -429,6 +441,7 @@ class SingleImagePreview extends StatefulWidget {
   final ViewerSettings settings;
   final Function(int) onSwitchRequest;
   final bool isActive;
+  final ValueChanged<bool>? onScaleStateChanged;
 
   const SingleImagePreview({
     super.key,
@@ -438,6 +451,7 @@ class SingleImagePreview extends StatefulWidget {
     required this.settings,
     required this.onSwitchRequest,
     required this.isActive,
+    this.onScaleStateChanged,
   });
 
   @override
@@ -457,6 +471,7 @@ class _SingleImagePreviewState extends State<SingleImagePreview> {
   // We want to disable it for Mouse (to prevent default zoom on scroll)
   // but keep it enabled for Touch (pinch zoom).
   bool _scaleEnabled = false;
+  final Set<int> _activePointers = {};
 
   @override
   void initState() {
@@ -626,6 +641,8 @@ class _SingleImagePreviewState extends State<SingleImagePreview> {
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    _activePointers.add(event.pointer);
+    _checkPointers();
     // If touch, enable scaling (pinch)
     if (event.kind == PointerDeviceKind.touch) {
       if (!_scaleEnabled) {
@@ -644,6 +661,21 @@ class _SingleImagePreviewState extends State<SingleImagePreview> {
     }
   }
 
+  void _onPointerUp(PointerUpEvent event) {
+    _activePointers.remove(event.pointer);
+    _checkPointers();
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    _activePointers.remove(event.pointer);
+    _checkPointers();
+  }
+
+  void _checkPointers() {
+    final shouldLock = _activePointers.length >= 2;
+    widget.onScaleStateChanged?.call(shouldLock);
+  }
+
   void _onPointerHover(PointerHoverEvent event) {
     // If mouse hover, disable scaling to prevent wheel zoom
     if (event.kind == PointerDeviceKind.mouse && _scaleEnabled) {
@@ -660,6 +692,8 @@ class _SingleImagePreviewState extends State<SingleImagePreview> {
         Listener(
           onPointerSignal: _handlePointerSignal,
           onPointerDown: _onPointerDown,
+          onPointerUp: _onPointerUp,
+          onPointerCancel: _onPointerCancel,
           onPointerHover: _onPointerHover,
           child: Center(
             child: InteractiveViewer(
@@ -764,4 +798,20 @@ class RawImageWidget extends StatelessWidget {
     }
     return image;
   }
+}
+
+class FastPageScrollPhysics extends PageScrollPhysics {
+  const FastPageScrollPhysics({super.parent});
+
+  @override
+  FastPageScrollPhysics applyTo(ScrollPhysics? ancestor) {
+    return FastPageScrollPhysics(parent: buildParent(ancestor));
+  }
+
+  @override
+  SpringDescription get spring => SpringDescription.withDampingRatio(
+        mass: 1.0,
+        stiffness: 500.0,
+        ratio: 1.0,
+      );
 }
