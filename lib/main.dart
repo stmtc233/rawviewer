@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -603,21 +602,6 @@ class _SingleImagePreviewState extends State<SingleImagePreview> {
 
         final Matrix4 matrix = _transformationController.value.clone();
 
-        // Translate the matrix to the focal point
-        // Apply scaling
-        // Translate back
-        // matrix = T(f) * S(s) * T(-f) * matrix
-        //
-        // However, since we are updating the transformation matrix directly,
-        // we need to be careful about the order.
-        // The transformation matrix T maps points from the child's coordinate system to the parent's.
-        // We want to scale around a point P in the parent's coordinate system (the viewport).
-        // The new matrix T' should satisfy:
-        // T'(p) = P + s * (T(p) - P) for a point p in child coordinates mapping to P
-        // actually simpler:
-        // We want to apply a transformation S centered at P to the current view.
-        // M_new = T(P) * S(s) * T(-P) * M_old
-
         final Matrix4 scaleMatrix = Matrix4.identity()
           ..translate(focalPoint.dx, focalPoint.dy)
           ..scale(scaleChange)
@@ -625,9 +609,6 @@ class _SingleImagePreviewState extends State<SingleImagePreview> {
 
         final Matrix4 newMatrix = scaleMatrix * matrix;
 
-        // Check limits (optional but good)
-        // InteractiveViewer handles constraints if we let it, but direct matrix manip might bypass.
-        // Let's just apply it.
         _transformationController.value = newMatrix;
       } else {
         // Switch image
@@ -651,8 +632,6 @@ class _SingleImagePreviewState extends State<SingleImagePreview> {
         });
       }
     } else if (event.kind == PointerDeviceKind.mouse) {
-      // If mouse click, disable scaling to be safe?
-      // Actually mouse drag might need scaleEnabled for panning? No, panEnabled is separate.
       if (_scaleEnabled) {
         setState(() {
           _scaleEnabled = false;
@@ -778,8 +757,6 @@ class RawImageWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // rawImage.data is now always ready to display (JPEG or BMP)
-    // No additional processing needed here.
     Widget image = Image.memory(
       rawImage.data,
       fit: fit,
