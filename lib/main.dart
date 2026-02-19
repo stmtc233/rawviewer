@@ -1,9 +1,9 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:path/path.dart' as path;
 import 'native_lib.dart';
 import 'settings_page.dart';
@@ -60,6 +60,18 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _openFolder() async {
+    if (Platform.isAndroid) {
+      // Request permissions for file access
+      // For Android 11+ (API 30+)
+      if (await Permission.manageExternalStorage.status.isDenied) {
+        await Permission.manageExternalStorage.request();
+      }
+      // For older Android or if generic storage permission is needed
+      if (await Permission.storage.status.isDenied) {
+        await Permission.storage.request();
+      }
+    }
+
     String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
 
     if (selectedDirectory != null) {

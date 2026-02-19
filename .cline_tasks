@@ -1,0 +1,5 @@
+- [ ] Analyze `lib/main.dart` for folder selection and image listing logic
+- [ ] Analyze `lib/native_lib.dart` for native bindings
+- [ ] Check Android permissions in `AndroidManifest.xml`
+- [ ] Check Android native code in `android/app/src/main/cpp/wrapper.cpp`
+- [ ] Debug/Fix the issue
