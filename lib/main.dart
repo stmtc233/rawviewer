@@ -19,13 +19,15 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Raw Viewer',
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        primarySwatch: Colors.blue,
+    return ExcludeSemantics(
+      child: MaterialApp(
+        title: 'Raw Viewer',
+        theme: ThemeData(
+          brightness: Brightness.dark,
+          primarySwatch: Colors.blue,
+        ),
+        home: const HomePage(),
       ),
-      home: const HomePage(),
     );
   }
 }
@@ -112,78 +114,117 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_currentDir ?? 'Raw Viewer'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: () async {
-              final result = await Navigator.push<ViewerSettings>(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => SettingsPage(settings: _settings),
-                ),
-              );
-
-              if (result != null) {
-                setState(() {
-                  if (_settings.maxCacheSize != result.maxCacheSize) {
-                    _settings = result;
-                    _initCache(); // Re-initialize with new size
-                  } else {
-                    _settings = result;
-                  }
-                });
-              }
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.folder_open),
-            onPressed: _openFolder,
-          ),
-        ],
-      ),
-      body: _files.isEmpty
-          ? const Center(child: Text('Open a folder with RAW images'))
-          : GridView.builder(
-              // Add cacheExtent to keep a few items off-screen alive
-              cacheExtent: 200,
-              padding: const EdgeInsets.all(8),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 4,
-                crossAxisSpacing: 8,
-                mainAxisSpacing: 8,
-              ),
-              itemCount: _files.length,
-              itemBuilder: (context, index) {
-                final filePath = _files[index];
-                // Use distinct key for thumbnail
-                final cacheKey = '$filePath:thumb';
-                return RawThumbnail(
-                  key: ValueKey(filePath), // Important for recycling
-                  filePath: filePath,
-                  cachedImage: _imageCache.get(cacheKey),
-                  onCacheUpdate: (image) {
-                    // Update cache asynchronously
-                    Future(() => _imageCache.put(cacheKey, image));
-                  },
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ImagePreviewPage(
-                          files: _files,
-                          initialIndex: index,
-                          imageCache: _imageCache,
-                          settings: _settings,
+        appBar: AppBar(
+          title: Text(_currentDir ?? 'Raw Viewer'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.settings),
+              onPressed: () async {
+                final result = await Navigator.push<ViewerSettings>(
+                  context,
+                  PageRouteBuilder(
+                    opaque: false,
+                    barrierColor: Colors.black54,
+                    barrierDismissible: true,
+                    pageBuilder: (context, animation, secondaryAnimation) {
+                      return ExcludeSemantics(
+                        child: FadeTransition(
+                          opacity: animation,
+                          child: Center(
+                            child: Container(
+                                width: 500,
+                                height: 600,
+                                clipBehavior: Clip.antiAlias,
+                                decoration: BoxDecoration(
+                                  color:
+                                      Theme.of(context).scaffoldBackgroundColor,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: SettingsPage(
+                                  settings: _settings,
+                                  onClose: (res) {
+                                    Navigator.pop(context, res);
+                                  },
+                                )),
+                          ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 );
+
+                if (result != null) {
+                  setState(() {
+                    if (_settings.maxCacheSize != result.maxCacheSize) {
+                      _settings = result;
+                      _initCache(); // Re-initialize with new size
+                    } else {
+                      _settings = result;
+                    }
+                  });
+                }
               },
             ),
-    );
+            IconButton(
+              icon: const Icon(Icons.folder_open),
+              onPressed: _openFolder,
+            ),
+          ],
+        ),
+        body: ExcludeSemantics(
+          child: _files.isEmpty
+              ? const Center(child: Text('Open a folder with RAW images'))
+              : GridView.builder(
+                  // Add cacheExtent to keep a few items off-screen alive
+                  cacheExtent: 200,
+                  padding: const EdgeInsets.all(8),
+                  // ... rest of the gridview ...
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 4,
+                    crossAxisSpacing: 8,
+                    mainAxisSpacing: 8,
+                  ),
+                  itemCount: _files.length,
+                  itemBuilder: (context, index) {
+                    final filePath = _files[index];
+                    // Use distinct key for thumbnail
+                    final cacheKey = '$filePath:thumb';
+                    return RawThumbnail(
+                      key: ValueKey(filePath), // Important for recycling
+                      filePath: filePath,
+                      cachedImage: _imageCache.get(cacheKey),
+                      onCacheUpdate: (image) {
+                        // Update cache asynchronously
+                        Future(() => _imageCache.put(cacheKey, image));
+                      },
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          PageRouteBuilder(
+                            pageBuilder:
+                                (context, animation, secondaryAnimation) {
+                              return ExcludeSemantics(
+                                child: FadeTransition(
+                                  opacity: animation,
+                                  child: ImagePreviewPage(
+                                    files: _files,
+                                    initialIndex: index,
+                                    imageCache: _imageCache,
+                                    settings: _settings,
+                                    onClose: () {
+                                      Navigator.pop(context);
+                                    },
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+        ));
   }
 }
 
@@ -319,6 +360,7 @@ class ImagePreviewPage extends StatefulWidget {
   final int initialIndex;
   final LruCache<String, LibRawImage> imageCache;
   final ViewerSettings settings;
+  final VoidCallback onClose;
 
   const ImagePreviewPage({
     super.key,
@@ -326,6 +368,7 @@ class ImagePreviewPage extends StatefulWidget {
     required this.initialIndex,
     required this.imageCache,
     required this.settings,
+    required this.onClose,
   });
 
   @override
@@ -428,6 +471,10 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
               title: Text(path.basename(currentFilePath)),
               backgroundColor: Colors.transparent,
               elevation: 0,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: widget.onClose,
+              ),
             ),
           ),
         ],
