@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -381,6 +382,10 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
   late int _targetPage;
   bool _isLocked = false;
 
+  DateTime? _lastSwitchTime;
+  Timer? _scrollStopTimer;
+  bool _isFastScrolling = false;
+
   @override
   void initState() {
     super.initState();
@@ -402,26 +407,90 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
         _targetPage = index;
       }
     });
+
+    // We also preload here to cover cases where user swiped manually instead of mouse wheel
+    _preloadThumbnails(index);
+  }
+
+  void _preloadThumbnails(int centerIndex, {bool isFastScrolling = false}) {
+    int range = isFastScrolling ? 2 : 10;
+    for (int i = 1; i <= range; i++) {
+      _preloadIndex(centerIndex + i);
+      _preloadIndex(centerIndex - i);
+    }
+  }
+
+  void _preloadIndex(int index) {
+    if (index >= 0 && index < widget.files.length) {
+      final String filePath = widget.files[index];
+      final thumbKey = '$filePath:thumb';
+      if (widget.imageCache.get(thumbKey) == null) {
+        WorkerService()
+            .requestThumbnail(filePath, priority: TaskPriority.low)
+            .result
+            .then((thumb) {
+          if (thumb != null) {
+            widget.imageCache.put(thumbKey, thumb);
+          }
+        });
+      }
+    }
   }
 
   void _switchPage(int delta) {
-    // Accumulate target
     int newTarget = _targetPage + delta;
-    // Clamp
     if (newTarget < 0) newTarget = 0;
     if (newTarget >= widget.files.length) newTarget = widget.files.length - 1;
 
-    if (newTarget != _targetPage) {
-      _targetPage = newTarget;
+    if (newTarget == _targetPage && newTarget == _currentIndex) {
+      return;
+    }
+
+    bool isAnimating = false;
+    if (_pageController.position.haveDimensions) {
+      final page = _pageController.page!;
+      if ((page - page.round()).abs() > 0.05) {
+        isAnimating = true;
+      }
+    }
+
+    final now = DateTime.now();
+    bool fastScroll = isAnimating ||
+        (_lastSwitchTime != null &&
+            now.difference(_lastSwitchTime!).inMilliseconds < 400);
+    _lastSwitchTime = now;
+
+    _targetPage = newTarget;
+    // Preload thumbnails IMMEDIATELY on scroll intention, rather than waiting for animation to hit 50%
+    _preloadThumbnails(_targetPage,
+        isFastScrolling: fastScroll || _isFastScrolling);
+
+    void startFastScrollTimer() {
+      if (!_isFastScrolling) {
+        setState(() {
+          _isFastScrolling = true;
+        });
+      }
+      _scrollStopTimer?.cancel();
+      _scrollStopTimer = Timer(const Duration(milliseconds: 300), () {
+        if (mounted) {
+          setState(() {
+            _isFastScrolling = false;
+            // Also ensure we correctly update target/index when stopping
+            if (_pageController.page != _targetPage.toDouble()) {
+              _pageController.jumpToPage(_targetPage);
+            }
+          });
+        }
+      });
+    }
+
+    if (fastScroll || _isFastScrolling) {
+      startFastScrollTimer();
+      _pageController.jumpToPage(_targetPage);
+    } else {
       _pageController.animateToPage(
         _targetPage,
-        duration: const Duration(milliseconds: 150),
-        curve: Curves.easeOut,
-      );
-    } else if (newTarget != _currentIndex) {
-      // If we are stuck (target == current limit) but current is not there yet, animate
-      _pageController.animateToPage(
-        newTarget,
         duration: const Duration(milliseconds: 150),
         curve: Curves.easeOut,
       );
@@ -441,6 +510,7 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
                 ? const NeverScrollableScrollPhysics()
                 : const FastPageScrollPhysics(),
             allowImplicitScrolling: true,
+            padEnds: true,
             itemCount: widget.files.length,
             onPageChanged: _onPageChanged,
             itemBuilder: (context, index) {
@@ -453,6 +523,7 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
                 settings: widget.settings,
                 onSwitchRequest: _switchPage,
                 isActive: index == _currentIndex,
+                isFastScrolling: _isFastScrolling,
                 onScaleStateChanged: (isScaling) {
                   if (_isLocked != isScaling) {
                     setState(() {
@@ -490,6 +561,7 @@ class SingleImagePreview extends StatefulWidget {
   final ViewerSettings settings;
   final Function(int) onSwitchRequest;
   final bool isActive;
+  final bool isFastScrolling;
   final ValueChanged<bool>? onScaleStateChanged;
 
   const SingleImagePreview({
@@ -500,6 +572,7 @@ class SingleImagePreview extends StatefulWidget {
     required this.settings,
     required this.onSwitchRequest,
     required this.isActive,
+    required this.isFastScrolling,
     this.onScaleStateChanged,
   });
 
@@ -537,17 +610,30 @@ class _SingleImagePreviewState extends State<SingleImagePreview> {
     super.didUpdateWidget(oldWidget);
     if (!widget.isActive && oldWidget.isActive) {
       _transformationController.value = Matrix4.identity();
-    }
-    // If we become active, upgrade priority if not fully loaded
-    if (widget.isActive && !oldWidget.isActive) {
-      // If a low-priority task is running, cancel it so we can restart with high priority
       if (_currentTask != null) {
         _currentTask!.cancel();
         _currentTask = null;
-        _isLoadingPreview = false;
+        if (mounted) {
+          setState(() {
+            _isLoadingPreview = false;
+          });
+        }
       }
-      // Reload logic will skip if _thumbnail/_preview are already set,
-      // but if we were waiting on a low-priority task, we restart it as high.
+    }
+
+    bool becameActive = widget.isActive && !oldWidget.isActive;
+    bool fastScrollStopped =
+        widget.isActive && !widget.isFastScrolling && oldWidget.isFastScrolling;
+    bool fastScrollStarted =
+        widget.isActive && widget.isFastScrolling && !oldWidget.isFastScrolling;
+
+    if (becameActive || fastScrollStopped || fastScrollStarted) {
+      // Cancel any ongoing task to restart with correct priority
+      _currentTask?.cancel();
+      _currentTask = null;
+      _isLoadingPreview = false;
+
+      // Reload logic will skip if _thumbnail/_preview are already set
       _loadImages();
     }
   }
@@ -573,23 +659,51 @@ class _SingleImagePreviewState extends State<SingleImagePreview> {
   }
 
   Future<void> _loadImages() async {
-    // Only load if active to prevent preloading
-    if (!widget.isActive) return;
-
-    const priority = TaskPriority.high;
-
     if (_thumbnail == null) {
-      final task =
-          WorkerService().requestThumbnail(widget.filePath, priority: priority);
-      _currentTask = task;
-      final thumb = await task.result;
-      _currentTask = null;
+      // Check if thumbnail is already in cache
+      final thumbKey = '${widget.filePath}:thumb';
+      final cachedThumb = widget.imageCache.get(thumbKey);
 
-      if (mounted && thumb != null) {
-        setState(() {
-          _thumbnail = thumb;
-        });
+      if (cachedThumb != null) {
+        if (mounted) {
+          setState(() {
+            _thumbnail = cachedThumb;
+          });
+        }
+      } else {
+        // If not active, or fast scrolling, use low priority
+        final thumbPriority = (!widget.isActive || widget.isFastScrolling)
+            ? TaskPriority.low
+            : TaskPriority.high;
+        final task = WorkerService()
+            .requestThumbnail(widget.filePath, priority: thumbPriority);
+        _currentTask = task;
+        final thumb = await task.result;
+        _currentTask = null;
+
+        if (mounted && thumb != null) {
+          setState(() {
+            _thumbnail = thumb;
+          });
+          // Cache it for fast subsequent switches
+          Future(() => widget.imageCache.put(thumbKey, thumb));
+        }
       }
+    }
+
+    if (!widget.isActive || widget.isFastScrolling) {
+      if (widget.isFastScrolling &&
+          _currentTask != null &&
+          _thumbnail != null) {
+        _currentTask?.cancel();
+        _currentTask = null;
+        if (mounted) {
+          setState(() {
+            _isLoadingPreview = false;
+          });
+        }
+      }
+      return;
     }
 
     if (_useEmbeddedPreview) return;
@@ -611,13 +725,14 @@ class _SingleImagePreviewState extends State<SingleImagePreview> {
       });
     }
 
+    const priority = TaskPriority.high;
     final task = WorkerService().requestPreview(widget.filePath,
         halfSize: _halfSize, priority: priority);
     _currentTask = task;
     final preview = await task.result;
     _currentTask = null;
 
-    if (mounted) {
+    if (mounted && widget.isActive) {
       setState(() {
         _preview = preview;
         _isLoadingPreview = false;

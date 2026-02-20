@@ -7,10 +7,17 @@ class WorkerService {
   static final WorkerService _instance = WorkerService._internal();
   factory WorkerService() => _instance;
 
-  SendPort? _workerSendPort;
+  // Use a pool of isolates to allow concurrent decoding
+  static const int _poolSize = 4;
+  final List<SendPort?> _workerSendPorts = List.filled(_poolSize, null);
+  final List<Isolate?> _isolates = List.filled(_poolSize, null);
+  int _nextWorkerIndex = 0;
+
   final Map<int, Completer<LibRawImage?>> _pendingRequests = {};
   int _nextRequestId = 0;
-  Isolate? _isolate;
+
+  // Deduplication map: key is 'path:type:halfSize' -> requestId
+  final Map<String, int> _activeRequestsByKey = {};
 
   // Track active requests to cancel them if needed (best effort)
   final Set<int> _cancelledRequests = {};
@@ -18,24 +25,30 @@ class WorkerService {
   WorkerService._internal();
 
   Future<void> init() async {
-    if (_isolate != null) return;
+    if (_isolates[0] != null) return;
 
-    final receivePort = ReceivePort();
-    _isolate = await Isolate.spawn(_workerEntry, receivePort.sendPort);
+    for (int i = 0; i < _poolSize; i++) {
+      final receivePort = ReceivePort();
+      _isolates[i] = await Isolate.spawn(_workerEntry, receivePort.sendPort);
 
-    // Wait for the worker to send its SendPort
-    _workerSendPort = await receivePort.first as SendPort;
+      // Wait for the worker to send its SendPort
+      _workerSendPorts[i] = await receivePort.first as SendPort;
 
-    // Listen for responses
-    final responsePort = ReceivePort();
-    _workerSendPort!.send(responsePort.sendPort);
+      // Listen for responses
+      final responsePort = ReceivePort();
+      _workerSendPorts[i]!.send(responsePort.sendPort);
 
-    responsePort.listen(_handleResponse);
+      responsePort.listen(_handleResponse);
+    }
   }
 
   void _handleResponse(dynamic message) {
     if (message is _WorkerResponse) {
       final completer = _pendingRequests.remove(message.requestId);
+
+      // Also remove from deduplication map
+      _activeRequestsByKey.removeWhere((key, val) => val == message.requestId);
+
       if (completer != null) {
         if (_cancelledRequests.contains(message.requestId)) {
           _cancelledRequests.remove(message.requestId);
@@ -69,10 +82,27 @@ class WorkerService {
   Future<T> _executeTask<T>(int requestId, String path, _RequestType type,
       {int halfSize = 1, TaskPriority priority = TaskPriority.high}) async {
     await init();
+
+    final dedupeKey = '$path:${type.name}:$halfSize';
+    if (_activeRequestsByKey.containsKey(dedupeKey)) {
+      final existingReqId = _activeRequestsByKey[dedupeKey]!;
+      // Bump the priority of the existing request
+      bumpRequest(existingReqId, priority);
+
+      if (_pendingRequests.containsKey(existingReqId)) {
+        final result = await _pendingRequests[existingReqId]!.future;
+        return result as T;
+      }
+    }
+
+    _activeRequestsByKey[dedupeKey] = requestId;
     final completer = Completer<LibRawImage?>();
     _pendingRequests[requestId] = completer;
 
-    _workerSendPort!.send(_WorkerRequest(
+    final workerIndex = _nextWorkerIndex;
+    _nextWorkerIndex = (_nextWorkerIndex + 1) % _poolSize;
+
+    _workerSendPorts[workerIndex]!.send(_WorkerRequest(
       requestId: requestId,
       path: path,
       type: type,
@@ -84,22 +114,35 @@ class WorkerService {
     return result as T;
   }
 
+  void bumpRequest(int requestId, TaskPriority priority) {
+    for (int i = 0; i < _poolSize; i++) {
+      if (_workerSendPorts[i] != null) {
+        _workerSendPorts[i]!.send(_BumpRequest(requestId, priority));
+      }
+    }
+  }
+
   void cancelRequest(int requestId) {
     _cancelledRequests.add(requestId);
-    if (_workerSendPort != null) {
-      _workerSendPort!.send(_CancelRequest(requestId));
+    for (int i = 0; i < _poolSize; i++) {
+      if (_workerSendPorts[i] != null) {
+        _workerSendPorts[i]!.send(_CancelRequest(requestId));
+      }
     }
     // Remove from pending requests map and complete with null to avoid hanging
     final completer = _pendingRequests.remove(requestId);
+    _activeRequestsByKey.removeWhere((key, val) => val == requestId);
     if (completer != null && !completer.isCompleted) {
       completer.complete(null);
     }
   }
 
   void dispose() {
-    _isolate?.kill();
-    _isolate = null;
-    _workerSendPort = null;
+    for (int i = 0; i < _poolSize; i++) {
+      _isolates[i]?.kill();
+      _isolates[i] = null;
+      _workerSendPorts[i] = null;
+    }
     _pendingRequests.clear();
     _cancelledRequests.clear();
   }
@@ -147,6 +190,12 @@ class _WorkerRequest {
 class _CancelRequest {
   final int requestId;
   _CancelRequest(this.requestId);
+}
+
+class _BumpRequest {
+  final int requestId;
+  final TaskPriority priority;
+  _BumpRequest(this.requestId, this.priority);
 }
 
 class _WorkerResponse {
@@ -241,6 +290,33 @@ void _workerEntry(SendPort mainSendPort) {
       // Optimization: Remove from pending queues immediately if present
       highPriorityRequests.removeWhere((r) => r.requestId == message.requestId);
       lowPriorityRequests.removeWhere((r) => r.requestId == message.requestId);
+    } else if (message is _BumpRequest) {
+      _WorkerRequest? foundRequest;
+
+      // Find and remove the request from whichever queue it's in
+      int index = highPriorityRequests
+          .indexWhere((r) => r.requestId == message.requestId);
+      if (index != -1) {
+        foundRequest = highPriorityRequests.removeAt(index);
+      } else {
+        index = lowPriorityRequests
+            .indexWhere((r) => r.requestId == message.requestId);
+        if (index != -1) {
+          foundRequest = lowPriorityRequests.removeAt(index);
+        }
+      }
+
+      // If found, re-add it to the end (top of stack) of the target priority queue
+      if (foundRequest != null) {
+        if (message.priority == TaskPriority.high) {
+          highPriorityRequests.add(foundRequest);
+        } else {
+          lowPriorityRequests.add(foundRequest);
+        }
+        if (!isProcessing) {
+          processQueue();
+        }
+      }
     } else if (message is _WorkerRequest) {
       if (message.priority == TaskPriority.high) {
         highPriorityRequests.add(message);
