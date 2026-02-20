@@ -253,60 +253,63 @@ class _RawThumbnailState extends State<RawThumbnail> {
 
   @override
   Widget build(BuildContext context) {
-    Widget child;
-    if (widget.cachedImage != null) {
-      child = _buildThumbnail(widget.cachedImage!);
-    } else {
-      child = FutureBuilder<LibRawImage?>(
-        future: _thumbFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return Container(
-              color: Colors.grey[800],
-              child: const Center(
-                  child: SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2))),
-            );
-          }
-          if (snapshot.hasError || !snapshot.hasData || snapshot.data == null) {
-            return Container(
-              color: Colors.grey[800],
-              child: const Center(child: Icon(Icons.broken_image, size: 20)),
-            );
-          }
-
-          return _buildThumbnail(snapshot.data!);
-        },
-      );
-    }
-
     return Semantics(
       label: path.basename(widget.filePath),
       button: true,
       onTap: widget.onTap,
-      excludeSemantics: true,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: child,
+      child: ExcludeSemantics(
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: GridTile(
+            footer: GridTileBar(
+              backgroundColor: Colors.black45,
+              title: Text(path.basename(widget.filePath),
+                  style: const TextStyle(fontSize: 10)),
+            ),
+            child: _buildContent(),
+          ),
+        ),
       ),
     );
   }
 
-  Widget _buildThumbnail(LibRawImage rawImage) {
-    return GridTile(
-      footer: GridTileBar(
-        backgroundColor: Colors.black45,
-        title: Text(path.basename(widget.filePath),
-            style: const TextStyle(fontSize: 10)),
-      ),
-      child: RawImageWidget(
-        rawImage: rawImage,
+  Widget _buildContent() {
+    if (widget.cachedImage != null) {
+      return RawImageWidget(
+        rawImage: widget.cachedImage!,
         fit: BoxFit.cover,
         memCacheWidth: 100,
         heroTag: widget.filePath,
-      ),
+      );
+    }
+
+    return FutureBuilder<LibRawImage?>(
+      future: _thumbFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Container(
+            color: Colors.grey[800],
+            child: const Center(
+                child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2))),
+          );
+        }
+        if (snapshot.hasError || !snapshot.hasData || snapshot.data == null) {
+          return Container(
+            color: Colors.grey[800],
+            child: const Center(child: Icon(Icons.broken_image, size: 20)),
+          );
+        }
+
+        return RawImageWidget(
+          rawImage: snapshot.data!,
+          fit: BoxFit.cover,
+          memCacheWidth: 100,
+          heroTag: widget.filePath,
+        );
+      },
     );
   }
 }
