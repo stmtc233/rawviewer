@@ -8,10 +8,13 @@ LIBRAW_ROOT="${PROJECT_ROOT}/windows/native_lib/libraw"
 WRAPPER_SOURCE="${SCRIPT_DIR}/wrapper.cpp"
 OUTPUT_DIR="${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}"
 OUTPUT_LIB="${OUTPUT_DIR}/libnative_lib.dylib"
-BUILD_METADATA="${OUTPUT_LIB}.metadata"
+BUILD_METADATA="${DERIVED_FILE_DIR}/libnative_lib.metadata"
+LEGACY_METADATA="${OUTPUT_LIB}.metadata"
 SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 
 mkdir -p "${OUTPUT_DIR}"
+mkdir -p "$(dirname "${BUILD_METADATA}")"
+rm -f "${LEGACY_METADATA}"
 
 if [[ ! -d "${LIBRAW_ROOT}" ]]; then
   echo "LibRaw sources not found at ${LIBRAW_ROOT}" >&2
@@ -23,7 +26,9 @@ while IFS= read -r -d '' file; do
   sources+=("${file}")
 done < <(find "${LIBRAW_ROOT}/src" -name '*.cpp' ! -name '*_ph.cpp' -print0)
 sources+=("${WRAPPER_SOURCE}")
-sources+=("${BASH_SOURCE[0]}")
+
+tracked_inputs=("${sources[@]}")
+tracked_inputs+=("${BASH_SOURCE[0]}")
 
 should_rebuild=0
 if [[ ! -f "${OUTPUT_LIB}" ]]; then
@@ -35,7 +40,7 @@ elif ! grep -Fxq "ARCHS=${ARCHS}" "${BUILD_METADATA}"; then
 elif ! grep -Fxq "CONFIGURATION=${CONFIGURATION}" "${BUILD_METADATA}"; then
   should_rebuild=1
 else
-  for source in "${sources[@]}"; do
+  for source in "${tracked_inputs[@]}"; do
     if [[ "${source}" -nt "${OUTPUT_LIB}" ]]; then
       should_rebuild=1
       break
