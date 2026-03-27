@@ -8,6 +8,8 @@
 #include "flutter/generated_plugin_registrant.h"
 #include <flutter/standard_method_codec.h>
 
+#include "utils.h"
+
 namespace {
 
 constexpr char kOpenPathChannelName[] = "rawviewer/open_paths";
