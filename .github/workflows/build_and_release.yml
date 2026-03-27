@@ -47,6 +47,65 @@ jobs:
           name: windows-build
           path: rawviewer-windows-${{ github.event.inputs.version }}.zip
 
+  build-macos:
+    name: Build macOS Universal
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Enable macOS desktop
+        run: flutter config --enable-macos-desktop
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Precache macOS artifacts
+        run: flutter precache --macos
+
+      - name: Build macOS
+        run: flutter build macos --release
+
+      - name: Verify macOS universal binaries
+        run: |
+          APP_BINARY="build/macos/Build/Products/Release/rawviewer.app/Contents/MacOS/rawviewer"
+          LIB_BINARY="build/macos/Build/Products/Release/rawviewer.app/Contents/Frameworks/libnative_lib.dylib"
+
+          for BINARY in "$APP_BINARY" "$LIB_BINARY"; do
+            if [ ! -f "$BINARY" ]; then
+              echo "Expected binary not found: $BINARY"
+              exit 1
+            fi
+
+            lipo -info "$BINARY"
+            ARCHS="$(lipo -archs "$BINARY")"
+            if [[ "$ARCHS" != *"arm64"* || "$ARCHS" != *"x86_64"* ]]; then
+              echo "Expected a universal binary containing arm64 and x86_64, got: $ARCHS"
+              exit 1
+            fi
+          done
+
+      - name: Zip macOS build
+        run: |
+          APP_PATH="build/macos/Build/Products/Release/rawviewer.app"
+          ZIP_PATH="rawviewer-macos-${{ github.event.inputs.version }}.zip"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Could not find macOS app bundle at $APP_PATH"
+            exit 1
+          fi
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+
+      - name: Upload macOS Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: rawviewer-macos-${{ github.event.inputs.version }}.zip
+
   build-android:
     name: Build Android
     runs-on: ubuntu-latest
@@ -82,13 +141,18 @@ jobs:
 
   release:
     name: Create Release
-    needs: [build-windows, build-android]
+    needs: [build-windows, build-macos, build-android]
     runs-on: ubuntu-latest
     steps:
       - name: Download Windows Build
         uses: actions/download-artifact@v4
         with:
           name: windows-build
+
+      - name: Download macOS Build
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-build
 
       - name: Download Android Build
         uses: actions/download-artifact@v4
@@ -102,6 +166,7 @@ jobs:
           name: Release ${{ github.event.inputs.version }}
           files: |
             rawviewer-windows-${{ github.event.inputs.version }}.zip
+            rawviewer-macos-${{ github.event.inputs.version }}.zip
             rawviewer-android-${{ github.event.inputs.version }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

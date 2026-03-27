@@ -14,9 +14,10 @@ This project demonstrates how to integrate C++ libraries (specifically LibRaw) i
 
 ## Supported Platforms
 
-Currently, the project is configured and tested primarily for **Windows**.
+Currently, the project is configured and tested primarily for desktop platforms.
 - **Windows**: Full support with bundled LibRaw build configuration.
-- **Linux/macOS**: Requires manual configuration of `native_lib` build (PRs welcome!).
+- **macOS**: Supported via an Xcode build script that compiles and bundles `libnative_lib.dylib`.
+- **Linux**: Still requires manual configuration of `native_lib` build.
 
 ## Prerequisites
 
@@ -38,11 +39,17 @@ Currently, the project is configured and tested primarily for **Windows**.
     flutter pub get
     ```
 
-3.  **Run the application (Windows):**
+3.  **Run the application:**
     ```bash
     flutter run -d windows
     ```
     *Note: The first run might take a while as it compiles the LibRaw C++ library.*
+
+    For macOS:
+    ```bash
+    flutter run -d macos
+    ```
+    *Note: The first macOS build also compiles LibRaw into a bundled `libnative_lib.dylib`, so it will be slower than incremental builds.*
 
 ## Project Structure
 

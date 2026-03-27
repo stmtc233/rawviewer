@@ -759,8 +759,12 @@ class _SingleImagePreviewState extends State<SingleImagePreview> {
       final isCtrlPressed =
           keysPressed.contains(LogicalKeyboardKey.controlLeft) ||
               keysPressed.contains(LogicalKeyboardKey.controlRight);
+      final isMetaPressed = keysPressed.contains(LogicalKeyboardKey.metaLeft) ||
+          keysPressed.contains(LogicalKeyboardKey.metaRight);
+      final isZoomModifierPressed =
+          Platform.isMacOS ? (isMetaPressed || isCtrlPressed) : isCtrlPressed;
 
-      if (isCtrlPressed) {
+      if (isZoomModifierPressed) {
         // Zoom centered on mouse pointer
         final double scaleChange = event.scrollDelta.dy < 0 ? 1.1 : 0.9;
         final Offset focalPoint = event.localPosition;

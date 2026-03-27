@@ -2,13 +2,32 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
-// For compute
+import 'package:path/path.dart' as path;
 
-final DynamicLibrary nativeLib = Platform.isWindows
-    ? DynamicLibrary.open('native_lib.dll')
-    : Platform.isAndroid
-        ? DynamicLibrary.open('libnative_lib.so')
-        : DynamicLibrary.process();
+DynamicLibrary _openNativeLibrary() {
+  if (Platform.isWindows) {
+    return DynamicLibrary.open('native_lib.dll');
+  }
+
+  if (Platform.isAndroid) {
+    return DynamicLibrary.open('libnative_lib.so');
+  }
+
+  if (Platform.isMacOS) {
+    final executableDir = path.dirname(Platform.resolvedExecutable);
+    final libraryPath = path.join(
+      executableDir,
+      '..',
+      'Frameworks',
+      'libnative_lib.dylib',
+    );
+    return DynamicLibrary.open(path.normalize(libraryPath));
+  }
+
+  return DynamicLibrary.process();
+}
+
+final DynamicLibrary nativeLib = _openNativeLibrary();
 
 final class ThumbnailResult extends Struct {
   external Pointer<Uint8> data;
