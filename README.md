@@ -1,72 +1,77 @@
-# RawViewer
+# Raw Viewer
 
-A high-performance RAW image viewer built with Flutter and LibRaw.
+![Flutter](https://img.shields.io/badge/Flutter-%2302569B.svg?style=for-the-badge&logo=Flutter&logoColor=white)
 
-This project demonstrates how to integrate C++ libraries (specifically LibRaw) into a Flutter application using `dart:ffi` for efficient image processing. It supports viewing thumbnails and full-resolution previews of various RAW formats (CR2, NEF, ARW, DNG, etc.).
+*[Read this in Chinese / 中文文档](README_zh.md)*
+
+A fast, cross-platform image viewer specifically built for RAW photography files, developed with Flutter and powered by [LibRaw](https://www.libraw.org/) via Dart FFI. 
+
+Raw Viewer allows photographers and enthusiasts to seamlessly view, browse, and organize their camera RAW files alongside standard image formats without relying on heavy photo editing software.
 
 ## Features
 
-- **Fast RAW Decoding**: Utilizes LibRaw C++ library for robust and speedy RAW image processing.
-- **Thumbnail Grid**: Quickly browse through directories of RAW images.
-- **Full Preview**: View high-quality previews of selected images.
-- **Native Integration**: Seamless communication between Dart and C++ via FFI.
-- **Worker Isolates**: Offloads heavy image processing to background threads to keep the UI responsive.
+- **Extensive Format Support:**
+  - RAW formats: `.arw`, `.cr2`, `.cr3`, `.dng`, `.nef`, `.orf`, `.raf`, `.rw2`, `.srw`
+  - Standard formats: `.jpg`, `.jpeg`, `.png`, `.webp`
+- **Blazing Fast Decoding:** Uses native C++ `LibRaw` with Dart isolates to decode images off the main UI thread.
+- **Embedded Previews:** Extracts embedded thumbnails and previews for lightning-fast browsing before falling back to full RAW decoding.
+- **Smart Caching:** Built-in LRU cache to manage memory efficiency while keeping viewed images ready.
+- **EXIF Metadata:** Reads and displays true image capture timestamps directly from EXIF data.
+- **Smooth Interaction:** Fast page scroll, smooth pinch-to-zoom (touch), and scroll-to-zoom (mouse) functionality.
+- **Cross-Platform:** Built for desktop (Windows, macOS) and mobile (Android) natively.
 
-## Supported Platforms
+## Screenshots
 
-Currently, the project is configured and tested primarily for desktop platforms.
-- **Windows**: Full support with bundled LibRaw build configuration.
-- **macOS**: Supported via an Xcode build script that compiles and bundles `libnative_lib.dylib`.
-- **Linux**: Still requires manual configuration of `native_lib` build.
-
-## Prerequisites
-
-- [Flutter SDK](https://flutter.dev/docs/get-started/install) (3.2.3 or higher recommended)
-- **Windows Development Requirements**:
-  - Visual Studio 2019 or later with "Desktop development with C++" workload installed.
-  - CMake (included with Visual Studio or installed separately).
+*(Add screenshots here)*
 
 ## Getting Started
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/yourusername/rawviewer.git
-    cd rawviewer
-    ```
+### Prerequisites
 
-2.  **Install dependencies:**
-    ```bash
-    flutter pub get
-    ```
+- [Flutter SDK](https://flutter.dev/docs/get-started/install) (>= 3.2.3)
+- Appropriate native build tools for your target platform:
+  - **Windows:** Visual Studio with C++ workload
+  - **macOS/iOS:** Xcode
+  - **Android:** Android Studio & NDK
 
-3.  **Run the application:**
-    ```bash
-    flutter run -d windows
-    ```
-    *Note: The first run might take a while as it compiles the LibRaw C++ library.*
+### Installation
 
-    For macOS:
-    ```bash
-    flutter run -d macos
-    ```
-    *Note: The first macOS build also compiles LibRaw into a bundled `libnative_lib.dylib`, so it will be slower than incremental builds.*
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/stmtc233/rawviewer.git
+   cd rawviewer
+   ```
 
-## Project Structure
+2. Fetch Flutter dependencies:
+   ```bash
+   flutter pub get
+   ```
 
-- `lib/`: Dart source code (UI, Logic, FFI bindings).
-  - `native_lib.dart`: FFI definitions and bindings to the C++ library.
-  - `worker_service.dart`: Handles background processing tasks.
-- `windows/native_lib/`: C++ source code and CMake configuration for the native library.
-  - `libraw/`: Embedded LibRaw source code.
-  - `wrapper.cpp`: C-style wrapper functions exposed to Dart.
-- `libraw_src/`: Upstream LibRaw source (reference).
+3. Run the application:
+   ```bash
+   flutter run
+   ```
+
+## Architecture
+
+- **Frontend:** Flutter framework with a grid-based gallery and swipeable full-screen viewer.
+- **Backend Decoder:**
+  - Uses `ffi` to connect Dart with native C/C++ wrappers around LibRaw.
+  - Native wrappers extract thumbnails and half-size previews efficiently.
+  - Generates standard BMP bytes in memory for instant rendering via `Image.memory`.
+- **Isolate Workers:** All intensive C++ FFI calls are offloaded using Dart compute/worker services to prevent UI jank.
+
+## Dependencies
+
+- [file_picker](https://pub.dev/packages/file_picker) - For opening files and folders natively.
+- [exif](https://pub.dev/packages/exif) - To parse image metadata timestamps.
+- [permission_handler](https://pub.dev/packages/permission_handler) - Handling Android storage permissions.
+- [ffi](https://pub.dev/packages/ffi) - For LibRaw C++ bindings.
 
 ## License
 
-This project uses [LibRaw](https://www.libraw.org/), which is dual-licensed under LGPL 2.1 and CDDL 1.0.
-Please ensure you comply with LibRaw's licensing terms when distributing this application.
+This project is licensed under the [MIT License](LICENSE).
 
-## Acknowledgments
-
-- [LibRaw](https://www.libraw.org/) - For the awesome RAW decoding library.
-- [Flutter](https://flutter.dev/) - For the beautiful UI framework.
+**Third-Party Licenses:**
+- This software uses the [LibRaw](https://www.libraw.org/) library, which is distributed under the **GNU LESSER GENERAL PUBLIC LICENSE version 2.1 (LGPL-2.1)** and the **COMMON DEVELOPMENT AND DISTRIBUTION LICENSE (CDDL) Version 1.0**. 
+- LibRaw is dynamically linked and used via Dart FFI. The original LibRaw source code is included in this repository unmodified. You can choose either LGPL-2.1 or CDDL-1.0 to comply with LibRaw's usage requirements.
