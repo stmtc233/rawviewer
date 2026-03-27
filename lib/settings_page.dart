@@ -1,25 +1,31 @@
 import 'package:flutter/material.dart';
 
+enum TimeDisplaySource { capturedAt, modifiedAt }
+
 class ViewerSettings {
   final bool useEmbeddedPreview;
   final bool halfSize;
   final int maxCacheSize; // in MB
+  final TimeDisplaySource timeDisplaySource;
 
   const ViewerSettings({
     this.useEmbeddedPreview = false,
     this.halfSize = true,
     this.maxCacheSize = 512,
+    this.timeDisplaySource = TimeDisplaySource.capturedAt,
   });
 
   ViewerSettings copyWith({
     bool? useEmbeddedPreview,
     bool? halfSize,
     int? maxCacheSize,
+    TimeDisplaySource? timeDisplaySource,
   }) {
     return ViewerSettings(
       useEmbeddedPreview: useEmbeddedPreview ?? this.useEmbeddedPreview,
       halfSize: halfSize ?? this.halfSize,
       maxCacheSize: maxCacheSize ?? this.maxCacheSize,
+      timeDisplaySource: timeDisplaySource ?? this.timeDisplaySource,
     );
   }
 }
@@ -112,6 +118,48 @@ class _SettingsPageState extends State<SettingsPage> {
                   setState(() {
                     _currentSettings =
                         _currentSettings.copyWith(halfSize: value);
+                  });
+                },
+              ),
+            ),
+            const Divider(),
+            const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Text(
+                'Time Display',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+            ExcludeSemantics(
+              child: RadioListTile<TimeDisplaySource>(
+                title: const Text('Capture Time'),
+                subtitle: const Text('Prefer EXIF or RAW metadata capture time'),
+                value: TimeDisplaySource.capturedAt,
+                groupValue: _currentSettings.timeDisplaySource,
+                onChanged: (value) {
+                  if (value == null) {
+                    return;
+                  }
+                  setState(() {
+                    _currentSettings =
+                        _currentSettings.copyWith(timeDisplaySource: value);
+                  });
+                },
+              ),
+            ),
+            ExcludeSemantics(
+              child: RadioListTile<TimeDisplaySource>(
+                title: const Text('File Modified Time'),
+                subtitle: const Text('Use file system last modified time directly'),
+                value: TimeDisplaySource.modifiedAt,
+                groupValue: _currentSettings.timeDisplaySource,
+                onChanged: (value) {
+                  if (value == null) {
+                    return;
+                  }
+                  setState(() {
+                    _currentSettings =
+                        _currentSettings.copyWith(timeDisplaySource: value);
                   });
                 },
               ),

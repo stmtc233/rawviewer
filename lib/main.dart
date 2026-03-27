@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:exif/exif.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path/path.dart' as path;
 import 'native_lib.dart';
@@ -46,6 +49,92 @@ class _MediaFile {
   bool get isRaw => kind == _MediaKind.raw;
 }
 
+final DateFormat _timestampFormatter = DateFormat('yyyy-MM-dd HH:mm:ss');
+
+class _MediaTimestampInfo {
+  final DateTime? capturedAt;
+  final DateTime modifiedAt;
+
+  const _MediaTimestampInfo({
+    required this.capturedAt,
+    required this.modifiedAt,
+  });
+
+  DateTime getDisplayTime(TimeDisplaySource source) {
+    switch (source) {
+      case TimeDisplaySource.capturedAt:
+        return capturedAt ?? modifiedAt;
+      case TimeDisplaySource.modifiedAt:
+        return modifiedAt;
+    }
+  }
+
+  String format(TimeDisplaySource source) {
+    return _timestampFormatter.format(getDisplayTime(source));
+  }
+}
+
+class _TimestampRepository {
+  final Map<String, Future<_MediaTimestampInfo>> _futureCache = {};
+
+  Future<_MediaTimestampInfo> load(String filePath) {
+    return _futureCache.putIfAbsent(filePath, () => _readTimestampInfo(filePath));
+  }
+
+  void clear() {
+    _futureCache.clear();
+  }
+
+  Future<_MediaTimestampInfo> _readTimestampInfo(String filePath) async {
+    final file = File(filePath);
+    final stat = await file.stat();
+    final modifiedAt = stat.modified;
+    DateTime? capturedAt;
+
+    try {
+      final bytes = await file.readAsBytes();
+      capturedAt = await _parseCapturedAtFromBytes(bytes);
+    } catch (_) {
+      capturedAt = null;
+    }
+
+    return _MediaTimestampInfo(capturedAt: capturedAt, modifiedAt: modifiedAt);
+  }
+}
+
+Future<DateTime?> _parseCapturedAtFromBytes(Uint8List bytes) async {
+  try {
+    final data = await readExifFromBytes(bytes);
+    final rawValue = data['Image DateTime']?.printable ??
+        data['EXIF DateTimeOriginal']?.printable ??
+        data['EXIF DateTimeDigitized']?.printable;
+    if (rawValue == null || rawValue.isEmpty) {
+      return null;
+    }
+    return _parseExifDateTime(rawValue);
+  } catch (_) {
+    return null;
+  }
+}
+
+DateTime? _parseExifDateTime(String value) {
+  final normalized = value.trim();
+  final exifMatch = RegExp(
+    r'^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$',
+  ).firstMatch(normalized);
+  if (exifMatch != null) {
+    return DateTime(
+      int.parse(exifMatch.group(1)!),
+      int.parse(exifMatch.group(2)!),
+      int.parse(exifMatch.group(3)!),
+      int.parse(exifMatch.group(4)!),
+      int.parse(exifMatch.group(5)!),
+      int.parse(exifMatch.group(6)!),
+    );
+  }
+  return DateTime.tryParse(normalized);
+}
+
 const MethodChannel _desktopOpenChannel = MethodChannel('rawviewer/open_paths');
 
 enum _OpenedSourceKind { none, folder, files }
@@ -85,6 +174,7 @@ class _HomePageState extends State<HomePage> {
   _OpenedSourceKind _openedSourceKind = _OpenedSourceKind.none;
   // Use LRU Cache to limit memory usage.
   late LruCache<String, ViewerImage> _imageCache;
+  final _TimestampRepository _timestampRepository = _TimestampRepository();
   ViewerSettings _settings = const ViewerSettings();
 
   @override
@@ -237,6 +327,7 @@ class _HomePageState extends State<HomePage> {
 
     if (clearCache) {
       _imageCache.clear();
+      _timestampRepository.clear();
     }
 
     setState(() {
@@ -382,6 +473,8 @@ class _HomePageState extends State<HomePage> {
                     return RawThumbnail(
                       key: ValueKey(filePath), // Important for recycling
                       mediaFile: mediaFile,
+                      settings: _settings,
+                      timestampRepository: _timestampRepository,
                       cachedImage: _imageCache.get(cacheKey),
                       onCacheUpdate: (image) {
                         // Update cache asynchronously
@@ -400,6 +493,7 @@ class _HomePageState extends State<HomePage> {
                                     files: _files,
                                     initialIndex: index,
                                     imageCache: _imageCache,
+                                    timestampRepository: _timestampRepository,
                                     settings: _settings,
                                     onClose: () {
                                       Navigator.pop(context);
@@ -420,6 +514,8 @@ class _HomePageState extends State<HomePage> {
 
 class RawThumbnail extends StatefulWidget {
   final _MediaFile mediaFile;
+  final ViewerSettings settings;
+  final _TimestampRepository timestampRepository;
   final ViewerImage? cachedImage;
   final Function(ViewerImage) onCacheUpdate;
   final VoidCallback onTap;
@@ -427,6 +523,8 @@ class RawThumbnail extends StatefulWidget {
   const RawThumbnail({
     super.key,
     required this.mediaFile,
+    required this.settings,
+    required this.timestampRepository,
     this.cachedImage,
     required this.onCacheUpdate,
     required this.onTap,
@@ -441,6 +539,7 @@ class RawThumbnail extends StatefulWidget {
 class _RawThumbnailState extends State<RawThumbnail> {
   WorkerTask<LibRawImage?>? _thumbTask;
   Future<ViewerImage?>? _thumbFuture;
+  late Future<_MediaTimestampInfo> _timestampFuture;
 
   @override
   void initState() {
@@ -449,6 +548,7 @@ class _RawThumbnailState extends State<RawThumbnail> {
     if (widget.cachedImage == null) {
       _loadThumbnail();
     }
+    _timestampFuture = widget.timestampRepository.load(widget.filePath);
   }
 
   @override
@@ -463,6 +563,10 @@ class _RawThumbnailState extends State<RawThumbnail> {
       if (widget.cachedImage == null) {
         _loadThumbnail();
       }
+      _timestampFuture = widget.timestampRepository.load(widget.filePath);
+    } else if (widget.settings.timeDisplaySource !=
+        oldWidget.settings.timeDisplaySource) {
+      setState(() {});
     }
   }
 
@@ -508,10 +612,44 @@ class _RawThumbnailState extends State<RawThumbnail> {
         child: GestureDetector(
           onTap: widget.onTap,
           child: GridTile(
-            footer: GridTileBar(
-              backgroundColor: Colors.black45,
-              title: Text(path.basename(widget.filePath),
-                  style: const TextStyle(fontSize: 10)),
+            footer: Container(
+              color: Colors.black45,
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    path.basename(widget.filePath),
+                    style: const TextStyle(
+                      fontSize: 10,
+                      height: 1.05,
+                      color: Colors.white,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  FutureBuilder<_MediaTimestampInfo>(
+                    future: _timestampFuture,
+                    builder: (context, snapshot) {
+                      final text = snapshot.hasData
+                          ? snapshot.data!
+                              .format(widget.settings.timeDisplaySource)
+                          : '---- -- -- --:--:--';
+                      return Text(
+                        text,
+                        style: const TextStyle(
+                          fontSize: 9,
+                          height: 1.0,
+                          color: Colors.white70,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
             child: Stack(
               fit: StackFit.expand,
@@ -594,6 +732,7 @@ class ImagePreviewPage extends StatefulWidget {
   final List<_MediaFile> files;
   final int initialIndex;
   final LruCache<String, ViewerImage> imageCache;
+  final _TimestampRepository timestampRepository;
   final ViewerSettings settings;
   final VoidCallback onClose;
 
@@ -602,6 +741,7 @@ class ImagePreviewPage extends StatefulWidget {
     required this.files,
     required this.initialIndex,
     required this.imageCache,
+    required this.timestampRepository,
     required this.settings,
     required this.onClose,
   });
@@ -619,6 +759,7 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
   DateTime? _lastSwitchTime;
   Timer? _scrollStopTimer;
   bool _isFastScrolling = false;
+  late Future<_MediaTimestampInfo> _currentTimestampFuture;
 
   @override
   void initState() {
@@ -626,6 +767,8 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
     _currentIndex = widget.initialIndex;
     _targetPage = widget.initialIndex;
     _pageController = PageController(initialPage: widget.initialIndex);
+    _currentTimestampFuture =
+        widget.timestampRepository.load(widget.files[_currentIndex].path);
   }
 
   @override
@@ -637,6 +780,8 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
   void _onPageChanged(int index) {
     setState(() {
       _currentIndex = index;
+      _currentTimestampFuture =
+          widget.timestampRepository.load(widget.files[_currentIndex].path);
       if ((_targetPage - index).abs() <= 1) {
         _targetPage = index;
       }
@@ -780,14 +925,35 @@ class _ImagePreviewPageState extends State<ImagePreviewPage> {
             top: 0,
             left: 0,
             right: 0,
-            child: AppBar(
-              title: Text(path.basename(currentFilePath)),
-              backgroundColor: Colors.transparent,
-              elevation: 0,
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: widget.onClose,
-              ),
+            child: FutureBuilder<_MediaTimestampInfo>(
+              future: _currentTimestampFuture,
+              builder: (context, snapshot) {
+                final timestampText = snapshot.hasData
+                    ? snapshot.data!.format(widget.settings.timeDisplaySource)
+                    : '---- -- -- --:--:--';
+                return AppBar(
+                  title: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(path.basename(currentFilePath)),
+                      Text(
+                        timestampText,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Colors.white70,
+                        ),
+                      ),
+                    ],
+                  ),
+                  backgroundColor: Colors.transparent,
+                  elevation: 0,
+                  leading: IconButton(
+                    icon: const Icon(Icons.arrow_back),
+                    onPressed: widget.onClose,
+                  ),
+                );
+              },
             ),
           ),
         ],
